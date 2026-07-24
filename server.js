@@ -100,6 +100,16 @@ app.get('/api/results', async (req, res) => {
   }
 });
 
+app.get('/api/fixtures', async (req, res) => {
+  try {
+    const data = await fetchFootballData(`/matches?competitions=${COMPETITIONS}&status=SCHEDULED`);
+    const upcoming = (data.matches || []).slice(0, 20);
+    res.json(upcoming);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/standings', async (req, res) => {
   const { competition } = req.query;
   if (!competition) return res.status(400).json({ error: 'Missing competition code' });
