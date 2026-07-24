@@ -13,6 +13,18 @@ console.log('ADMIN_SECRET is set to:', JSON.stringify(ADMIN_SECRET));
 
 const DATA_FILE = path.join(__dirname, 'data', 'articles.js');
 
+const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
+const FOOTBALL_API_BASE = 'https://api.football-data.org/v4';
+const COMPETITIONS = 'PL,PD,SA,BL1,FL1,CL';
+
+async function fetchFootballData(path) {
+  const res = await fetch(`${FOOTBALL_API_BASE}${path}`, {
+    headers: { 'X-Auth-Token': FOOTBALL_API_KEY },
+  });
+  if (!res.ok) throw new Error(`Football API error: ${res.status}`);
+  return res.json();
+}
+
 app.get('/api/articles', (req, res) => {
   const { category, subcategory } = req.query;
   let result = articles;
@@ -67,6 +79,36 @@ app.post('/api/articles', (req, res) => {
   fs.writeFileSync(DATA_FILE, fileContent);
 
   res.status(201).json(newArticle);
+});
+
+app.get('/api/live-scores', async (req, res) => {
+  try {
+    const data = await fetchFootballData(`/matches?competitions=${COMPETITIONS}&status=LIVE`);
+    res.json(data.matches || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/results', async (req, res) => {
+  try {
+    const data = await fetchFootballData(`/matches?competitions=${COMPETITIONS}&status=FINISHED`);
+    const recent = (data.matches || []).slice(-20).reverse();
+    res.json(recent);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/standings', async (req, res) => {
+  const { competition } = req.query;
+  if (!competition) return res.status(400).json({ error: 'Missing competition code' });
+  try {
+    const data = await fetchFootballData(`/competitions/${competition}/standings`);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 5000;
