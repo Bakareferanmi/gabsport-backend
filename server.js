@@ -14,10 +14,16 @@ console.log('ADMIN_SECRET is set to:', JSON.stringify(ADMIN_SECRET));
 const DATA_FILE = path.join(__dirname, 'data', 'articles.js');
 
 app.get('/api/articles', (req, res) => {
-  const { category } = req.query;
-  const result = category
-    ? articles.filter((a) => a.category.toLowerCase() === category.toLowerCase())
-    : articles;
+  const { category, subcategory } = req.query;
+  let result = articles;
+  if (category) {
+    result = result.filter((a) => a.category.toLowerCase() === category.toLowerCase());
+  }
+  if (subcategory) {
+    result = result.filter(
+      (a) => a.subcategory && a.subcategory.toLowerCase() === subcategory.toLowerCase()
+    );
+  }
   res.json(result);
 });
 
@@ -33,7 +39,7 @@ app.post('/api/articles', (req, res) => {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const { title, excerpt, content, category, image, author } = req.body;
+  const { title, excerpt, content, category, subcategory, image, author } = req.body;
   if (!title || !excerpt || !content || !category || !image || !author) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
@@ -49,6 +55,7 @@ app.post('/api/articles', (req, res) => {
     excerpt,
     content,
     category,
+    subcategory: subcategory || null,
     image,
     author,
     date: new Date().toISOString().split('T')[0],
