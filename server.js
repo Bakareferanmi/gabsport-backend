@@ -1,10 +1,15 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const articles = require('./data/articles');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'changeme123';
+const DATA_FILE = path.join(__dirname, 'data', 'articles.js');
 
 app.get('/api/articles', (req, res) => {
   const { category } = req.query;
@@ -20,6 +25,40 @@ app.get('/api/articles/:slug', (req, res) => {
   res.json(article);
 });
 
+app.post('/api/articles', (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { title, excerpt, content, category, image, author } = req.body;
+  if (!title || !excerpt || !content || !category || !image || !author) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  const slug = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+
+  const newArticle = {
+    slug,
+    title,
+    excerpt,
+    content,
+    category,
+    image,
+    author,
+    date: new Date().toISOString().split('T')[0],
+  };
+
+  articles.unshift(newArticle);
+
+  const fileContent = `const articles = ${JSON.stringify(articles, null, 2)};\n\nmodule.exports = articles;\n`;
+  fs.writeFileSync(DATA_FILE, fileContent);
+
+  res.status(201).json(newArticle);
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
