@@ -9,6 +9,8 @@ app.use(cors());
 app.use(express.json());
 
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'changeme123';
+console.log('ADMIN_SECRET is set to:', JSON.stringify(ADMIN_SECRET));
+
 const DATA_FILE = path.join(__dirname, 'data', 'articles.js');
 
 app.get('/api/articles', (req, res) => {
