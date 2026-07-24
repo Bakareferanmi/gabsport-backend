@@ -39,6 +39,16 @@ const articles = [
     author: "Feranmi Bakare",
     date: "2026-07-15",
   },
+  {
+    slug: "africa-cup-of-nations-preview",
+    title: "Africa Cup of Nations: What to Expect This Year",
+    excerpt: "A look at the favorites, dark horses, and storylines heading into the tournament.",
+    content: "Full article content goes here. This is placeholder text until real content is added.",
+    category: "Football",
+    image: "https://images.unsplash.com/photo-1522778119026-d647f0596c20?w=800",
+    author: "Feranmi Bakare",
+    date: "2026-07-24",
+  },
 ];
 
 module.exports = articles;
