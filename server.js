@@ -3,11 +3,21 @@ const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
 const webpush = require('web-push');
+const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
 const articles = require('./data/articles');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 let subscriptions = [];
 
@@ -79,6 +89,29 @@ app.get('/api/articles/:slug', (req, res) => {
   res.json(article);
 });
 
+app.post('/api/upload-image', upload.single('image'), async (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (!req.file) {
+    return res.status(400).json({ error: 'No image provided' });
+  }
+
+  try {
+    const uploadResult = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'gabsport' },
+        (err, result) => (err ? reject(err) : resolve(result))
+      );
+      stream.end(req.file.buffer);
+    });
+    res.json({ url: uploadResult.secure_url });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/articles', (req, res) => {
   const secret = req.headers['x-admin-secret'];
   if (secret !== ADMIN_SECRET) {
@@ -120,6 +153,24 @@ app.post('/api/articles', (req, res) => {
   Promise.allSettled(subscriptions.map((sub) => webpush.sendNotification(sub, payload)));
 
   res.status(201).json(newArticle);
+});
+
+app.delete('/api/articles/:slug', (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const index = articles.findIndex((a) => a.slug === req.params.slug);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Article not found' });
+  }
+
+  articles.splice(index, 1);
+  const fileContent = `const articles = ${JSON.stringify(articles, null, 2)};\n\nmodule.exports = articles;\n`;
+  fs.writeFileSync(DATA_FILE, fileContent);
+
+  res.json({ message: 'Deleted' });
 });
 
 app.get('/api/live-scores', async (req, res) => {
