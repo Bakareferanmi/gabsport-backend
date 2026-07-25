@@ -162,5 +162,62 @@ app.get('/api/standings', async (req, res) => {
   }
 });
 
+let lastKnownMatches = {};
+
+async function checkForMatchUpdates() {
+  try {
+    const data = await fetchFootballData(`/matches?competitions=${COMPETITIONS}`);
+    const matches = data.matches || [];
+
+    for (const match of matches) {
+      const prev = lastKnownMatches[match.id];
+      const currentScore = `${match.score.fullTime.home}-${match.score.fullTime.away}`;
+
+      if (!prev) {
+        lastKnownMatches[match.id] = { status: match.status, score: currentScore };
+        continue;
+      }
+
+      if (prev.status !== 'IN_PLAY' && match.status === 'IN_PLAY') {
+        await broadcastNotification(
+          'Match Started',
+          `${match.homeTeam.name} vs ${match.awayTeam.name} is live now`,
+          '/live-scores'
+        );
+      }
+
+      if (prev.score !== currentScore && match.status === 'IN_PLAY') {
+        await broadcastNotification(
+          'Goal!',
+          `${match.homeTeam.name} ${match.score.fullTime.home} - ${match.score.fullTime.away} ${match.awayTeam.name}`,
+          '/live-scores'
+        );
+      }
+
+      if (prev.status !== 'FINISHED' && match.status === 'FINISHED') {
+        await broadcastNotification(
+          'Full Time',
+          `${match.homeTeam.name} ${match.score.fullTime.home} - ${match.score.fullTime.away} ${match.awayTeam.name}`,
+          '/results'
+        );
+      }
+
+      lastKnownMatches[match.id] = { status: match.status, score: currentScore };
+    }
+  } catch (err) {
+    console.error('Match polling error:', err.message);
+  }
+}
+
+async function broadcastNotification(title, body, url) {
+  const payload = JSON.stringify({ title, body, url });
+  const results = await Promise.allSettled(
+    subscriptions.map((sub) => webpush.sendNotification(sub, payload))
+  );
+  subscriptions = subscriptions.filter((_, i) => results[i].status === 'fulfilled');
+}
+
+setInterval(checkForMatchUpdates, 60000);
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
