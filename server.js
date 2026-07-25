@@ -2,11 +2,20 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const webpush = require('web-push');
 const articles = require('./data/articles');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+let subscriptions = [];
+
+webpush.setVapidDetails(
+  'mailto:hello@gabsport.com',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'changeme123';
 console.log('ADMIN_SECRET is set to:', JSON.stringify(ADMIN_SECRET));
@@ -24,6 +33,31 @@ async function fetchFootballData(path) {
   if (!res.ok) throw new Error(`Football API error: ${res.status}`);
   return res.json();
 }
+
+app.post('/api/subscribe', (req, res) => {
+  const subscription = req.body;
+  const exists = subscriptions.find((s) => s.endpoint === subscription.endpoint);
+  if (!exists) subscriptions.push(subscription);
+  res.status(201).json({ message: 'Subscribed' });
+});
+
+app.post('/api/notify', async (req, res) => {
+  const secret = req.headers['x-admin-secret'];
+  if (secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { title, body, url } = req.body;
+  const payload = JSON.stringify({ title, body, url: url || '/' });
+
+  const results = await Promise.allSettled(
+    subscriptions.map((sub) => webpush.sendNotification(sub, payload))
+  );
+
+  subscriptions = subscriptions.filter((_, i) => results[i].status === 'fulfilled');
+
+  res.json({ sent: results.filter((r) => r.status === 'fulfilled').length });
+});
 
 app.get('/api/articles', (req, res) => {
   const { category, subcategory } = req.query;
@@ -77,6 +111,13 @@ app.post('/api/articles', (req, res) => {
 
   const fileContent = `const articles = ${JSON.stringify(articles, null, 2)};\n\nmodule.exports = articles;\n`;
   fs.writeFileSync(DATA_FILE, fileContent);
+
+  const payload = JSON.stringify({
+    title: 'New Article on gabsport',
+    body: newArticle.title,
+    url: `/article/${newArticle.slug}`,
+  });
+  Promise.allSettled(subscriptions.map((sub) => webpush.sendNotification(sub, payload)));
 
   res.status(201).json(newArticle);
 });
