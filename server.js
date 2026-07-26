@@ -1,15 +1,31 @@
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
 const webpush = require('web-push');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
-const articles = require('./data/articles');
+const mongoose = require('mongoose');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('MongoDB connected'))
+  .catch((err) => console.error('MongoDB connection error:', err.message));
+
+const articleSchema = new mongoose.Schema({
+  slug: { type: String, required: true, unique: true },
+  title: String,
+  excerpt: String,
+  content: String,
+  category: String,
+  subcategory: String,
+  image: String,
+  author: String,
+  date: String,
+});
+
+const Article = mongoose.model('Article', articleSchema);
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -17,12 +33,6 @@ cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
-});
-
-console.log('Cloudinary config check:', {
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY ? 'SET' : 'MISSING',
-  api_secret: process.env.CLOUDINARY_API_SECRET ? 'SET' : 'MISSING',
 });
 
 let subscriptions = [];
@@ -35,8 +45,6 @@ webpush.setVapidDetails(
 
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'changeme123';
 console.log('ADMIN_SECRET is set to:', JSON.stringify(ADMIN_SECRET));
-
-const DATA_FILE = path.join(__dirname, 'data', 'articles.js');
 
 const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
 const FOOTBALL_API_BASE = 'https://api.football-data.org/v4';
@@ -75,24 +83,28 @@ app.post('/api/notify', async (req, res) => {
   res.json({ sent: results.filter((r) => r.status === 'fulfilled').length });
 });
 
-app.get('/api/articles', (req, res) => {
+app.get('/api/articles', async (req, res) => {
   const { category, subcategory } = req.query;
-  let result = articles;
-  if (category) {
-    result = result.filter((a) => a.category.toLowerCase() === category.toLowerCase());
+  const filter = {};
+  if (category) filter.category = category;
+  if (subcategory) filter.subcategory = subcategory;
+
+  try {
+    const result = await Article.find(filter).sort({ date: -1 });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  if (subcategory) {
-    result = result.filter(
-      (a) => a.subcategory && a.subcategory.toLowerCase() === subcategory.toLowerCase()
-    );
-  }
-  res.json(result);
 });
 
-app.get('/api/articles/:slug', (req, res) => {
-  const article = articles.find((a) => a.slug === req.params.slug);
-  if (!article) return res.status(404).json({ error: 'Article not found' });
-  res.json(article);
+app.get('/api/articles/:slug', async (req, res) => {
+  try {
+    const article = await Article.findOne({ slug: req.params.slug });
+    if (!article) return res.status(404).json({ error: 'Article not found' });
+    res.json(article);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/upload-image', upload.single('image'), async (req, res) => {
@@ -118,7 +130,7 @@ app.post('/api/upload-image', upload.single('image'), async (req, res) => {
   }
 });
 
-app.post('/api/articles', (req, res) => {
+app.post('/api/articles', async (req, res) => {
   const secret = req.headers['x-admin-secret'];
   if (secret !== ADMIN_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -134,49 +146,45 @@ app.post('/api/articles', (req, res) => {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
 
-  const newArticle = {
-    slug,
-    title,
-    excerpt,
-    content,
-    category,
-    subcategory: subcategory || null,
-    image,
-    author,
-    date: new Date().toISOString().split('T')[0],
-  };
+  try {
+    const newArticle = await Article.create({
+      slug,
+      title,
+      excerpt,
+      content,
+      category,
+      subcategory: subcategory || null,
+      image,
+      author,
+      date: new Date().toISOString().split('T')[0],
+    });
 
-  articles.unshift(newArticle);
+    const payload = JSON.stringify({
+      title: 'New Article on gabsport',
+      body: newArticle.title,
+      url: `/article/${newArticle.slug}`,
+    });
+    Promise.allSettled(subscriptions.map((sub) => webpush.sendNotification(sub, payload)));
 
-  const fileContent = `const articles = ${JSON.stringify(articles, null, 2)};\n\nmodule.exports = articles;\n`;
-  fs.writeFileSync(DATA_FILE, fileContent);
-
-  const payload = JSON.stringify({
-    title: 'New Article on gabsport',
-    body: newArticle.title,
-    url: `/article/${newArticle.slug}`,
-  });
-  Promise.allSettled(subscriptions.map((sub) => webpush.sendNotification(sub, payload)));
-
-  res.status(201).json(newArticle);
+    res.status(201).json(newArticle);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/articles/:slug', (req, res) => {
+app.delete('/api/articles/:slug', async (req, res) => {
   const secret = req.headers['x-admin-secret'];
   if (secret !== ADMIN_SECRET) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  const index = articles.findIndex((a) => a.slug === req.params.slug);
-  if (index === -1) {
-    return res.status(404).json({ error: 'Article not found' });
+  try {
+    const deleted = await Article.findOneAndDelete({ slug: req.params.slug });
+    if (!deleted) return res.status(404).json({ error: 'Article not found' });
+    res.json({ message: 'Deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  articles.splice(index, 1);
-  const fileContent = `const articles = ${JSON.stringify(articles, null, 2)};\n\nmodule.exports = articles;\n`;
-  fs.writeFileSync(DATA_FILE, fileContent);
-
-  res.json({ message: 'Deleted' });
 });
 
 app.get('/api/live-scores', async (req, res) => {
