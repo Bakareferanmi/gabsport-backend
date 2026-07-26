@@ -23,6 +23,8 @@ const articleSchema = new mongoose.Schema({
   image: String,
   author: String,
   date: String,
+  publishAt: { type: Date, default: Date.now },
+  notified: { type: Boolean, default: false },
 });
 
 const Article = mongoose.model('Article', articleSchema);
@@ -66,6 +68,15 @@ async function fetchFootballData(path) {
   return res.json();
 }
 
+function checkAdmin(req, res) {
+  const secret = req.headers['x-admin-secret'];
+  if (secret !== ADMIN_SECRET) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return false;
+  }
+  return true;
+}
+
 app.post('/api/subscribe', async (req, res) => {
   const subscription = req.body;
   try {
@@ -80,10 +91,7 @@ app.post('/api/subscribe', async (req, res) => {
 });
 
 app.post('/api/notify', async (req, res) => {
-  const secret = req.headers['x-admin-secret'];
-  if (secret !== ADMIN_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (!checkAdmin(req, res)) return;
 
   const { title, body, url } = req.body;
   const payload = JSON.stringify({ title, body, url: url || '/' });
@@ -103,23 +111,28 @@ app.post('/api/notify', async (req, res) => {
   res.json({ sent: results.filter((r) => r.status === 'fulfilled').length });
 });
 
+// Public: only shows articles whose publishAt has already passed
 app.get('/api/articles', async (req, res) => {
   const { category, subcategory } = req.query;
-  const filter = {};
+  const filter = { publishAt: { $lte: new Date() } };
   if (category) filter.category = category;
   if (subcategory) filter.subcategory = subcategory;
 
   try {
-    const result = await Article.find(filter).sort({ date: -1 });
+    const result = await Article.find(filter).sort({ publishAt: -1 });
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Public: single article, hidden until publishAt passes
 app.get('/api/articles/:slug', async (req, res) => {
   try {
-    const article = await Article.findOne({ slug: req.params.slug });
+    const article = await Article.findOne({
+      slug: req.params.slug,
+      publishAt: { $lte: new Date() },
+    });
     if (!article) return res.status(404).json({ error: 'Article not found' });
     res.json(article);
   } catch (err) {
@@ -127,11 +140,19 @@ app.get('/api/articles/:slug', async (req, res) => {
   }
 });
 
-app.post('/api/upload-image', upload.single('image'), async (req, res) => {
-  const secret = req.headers['x-admin-secret'];
-  if (secret !== ADMIN_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
+// Admin-only: sees everything, including future-scheduled articles
+app.get('/api/admin/articles', async (req, res) => {
+  if (!checkAdmin(req, res)) return;
+  try {
+    const result = await Article.find().sort({ publishAt: -1 });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
+});
+
+app.post('/api/upload-image', upload.single('image'), async (req, res) => {
+  if (!checkAdmin(req, res)) return;
   if (!req.file) {
     return res.status(400).json({ error: 'No image provided' });
   }
@@ -151,12 +172,9 @@ app.post('/api/upload-image', upload.single('image'), async (req, res) => {
 });
 
 app.post('/api/articles', async (req, res) => {
-  const secret = req.headers['x-admin-secret'];
-  if (secret !== ADMIN_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (!checkAdmin(req, res)) return;
 
-  const { title, excerpt, content, category, subcategory, image, author } = req.body;
+  const { title, excerpt, content, category, subcategory, image, author, publishAt } = req.body;
   if (!title || !excerpt || !content || !category || !image || !author) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
@@ -165,6 +183,9 @@ app.post('/api/articles', async (req, res) => {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
+
+  const scheduledDate = publishAt ? new Date(publishAt) : new Date();
+  const isLiveNow = scheduledDate <= new Date();
 
   try {
     const newArticle = await Article.create({
@@ -177,15 +198,19 @@ app.post('/api/articles', async (req, res) => {
       image,
       author,
       date: new Date().toISOString().split('T')[0],
+      publishAt: scheduledDate,
+      notified: isLiveNow,
     });
 
-    const payload = JSON.stringify({
-      title: 'New Article on gabsport',
-      body: newArticle.title,
-      url: `/article/${newArticle.slug}`,
-    });
-    const subs = await Subscription.find();
-    Promise.allSettled(subs.map((sub) => webpush.sendNotification(sub, payload)));
+    if (isLiveNow) {
+      const payload = JSON.stringify({
+        title: 'New Article on gabsport',
+        body: newArticle.title,
+        url: `/article/${newArticle.slug}`,
+      });
+      const subs = await Subscription.find();
+      Promise.allSettled(subs.map((sub) => webpush.sendNotification(sub, payload)));
+    }
 
     res.status(201).json(newArticle);
   } catch (err) {
@@ -194,10 +219,7 @@ app.post('/api/articles', async (req, res) => {
 });
 
 app.delete('/api/articles/:slug', async (req, res) => {
-  const secret = req.headers['x-admin-secret'];
-  if (secret !== ADMIN_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (!checkAdmin(req, res)) return;
 
   try {
     const deleted = await Article.findOneAndDelete({ slug: req.params.slug });
@@ -295,6 +317,27 @@ async function checkForMatchUpdates() {
   }
 }
 
+async function checkScheduledArticles() {
+  try {
+    const dueArticles = await Article.find({
+      publishAt: { $lte: new Date() },
+      notified: false,
+    });
+
+    for (const article of dueArticles) {
+      await broadcastNotification(
+        'New Article on gabsport',
+        article.title,
+        `/article/${article.slug}`
+      );
+      article.notified = true;
+      await article.save();
+    }
+  } catch (err) {
+    console.error('Scheduled article check error:', err.message);
+  }
+}
+
 async function broadcastNotification(title, body, url) {
   const payload = JSON.stringify({ title, body, url });
   const subs = await Subscription.find();
@@ -310,6 +353,7 @@ async function broadcastNotification(title, body, url) {
 }
 
 setInterval(checkForMatchUpdates, 60000);
+setInterval(checkScheduledArticles, 60000);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
