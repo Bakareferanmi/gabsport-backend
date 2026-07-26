@@ -27,6 +27,16 @@ const articleSchema = new mongoose.Schema({
 
 const Article = mongoose.model('Article', articleSchema);
 
+const subscriptionSchema = new mongoose.Schema({
+  endpoint: { type: String, required: true, unique: true },
+  keys: {
+    p256dh: String,
+    auth: String,
+  },
+});
+
+const Subscription = mongoose.model('Subscription', subscriptionSchema);
+
 const upload = multer({ storage: multer.memoryStorage() });
 
 cloudinary.config({
@@ -34,8 +44,6 @@ cloudinary.config({
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
-
-let subscriptions = [];
 
 webpush.setVapidDetails(
   'mailto:hello@gabsport.com',
@@ -58,11 +66,17 @@ async function fetchFootballData(path) {
   return res.json();
 }
 
-app.post('/api/subscribe', (req, res) => {
+app.post('/api/subscribe', async (req, res) => {
   const subscription = req.body;
-  const exists = subscriptions.find((s) => s.endpoint === subscription.endpoint);
-  if (!exists) subscriptions.push(subscription);
-  res.status(201).json({ message: 'Subscribed' });
+  try {
+    const exists = await Subscription.findOne({ endpoint: subscription.endpoint });
+    if (!exists) {
+      await Subscription.create(subscription);
+    }
+    res.status(201).json({ message: 'Subscribed' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/notify', async (req, res) => {
@@ -74,11 +88,17 @@ app.post('/api/notify', async (req, res) => {
   const { title, body, url } = req.body;
   const payload = JSON.stringify({ title, body, url: url || '/' });
 
+  const subs = await Subscription.find();
   const results = await Promise.allSettled(
-    subscriptions.map((sub) => webpush.sendNotification(sub, payload))
+    subs.map((sub) => webpush.sendNotification(sub, payload))
   );
 
-  subscriptions = subscriptions.filter((_, i) => results[i].status === 'fulfilled');
+  const failedIds = subs
+    .filter((_, i) => results[i].status === 'rejected')
+    .map((s) => s._id);
+  if (failedIds.length) {
+    await Subscription.deleteMany({ _id: { $in: failedIds } });
+  }
 
   res.json({ sent: results.filter((r) => r.status === 'fulfilled').length });
 });
@@ -164,7 +184,8 @@ app.post('/api/articles', async (req, res) => {
       body: newArticle.title,
       url: `/article/${newArticle.slug}`,
     });
-    Promise.allSettled(subscriptions.map((sub) => webpush.sendNotification(sub, payload)));
+    const subs = await Subscription.find();
+    Promise.allSettled(subs.map((sub) => webpush.sendNotification(sub, payload)));
 
     res.status(201).json(newArticle);
   } catch (err) {
@@ -276,10 +297,16 @@ async function checkForMatchUpdates() {
 
 async function broadcastNotification(title, body, url) {
   const payload = JSON.stringify({ title, body, url });
+  const subs = await Subscription.find();
   const results = await Promise.allSettled(
-    subscriptions.map((sub) => webpush.sendNotification(sub, payload))
+    subs.map((sub) => webpush.sendNotification(sub, payload))
   );
-  subscriptions = subscriptions.filter((_, i) => results[i].status === 'fulfilled');
+  const failedIds = subs
+    .filter((_, i) => results[i].status === 'rejected')
+    .map((s) => s._id);
+  if (failedIds.length) {
+    await Subscription.deleteMany({ _id: { $in: failedIds } });
+  }
 }
 
 setInterval(checkForMatchUpdates, 60000);
