@@ -53,8 +53,11 @@ webpush.setVapidDetails(
   process.env.VAPID_PRIVATE_KEY
 );
 
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'changeme123';
-console.log('ADMIN_SECRET is set to:', JSON.stringify(ADMIN_SECRET));
+const ADMIN_SECRETS = [
+  process.env.ADMIN_SECRET || 'changeme123',
+  process.env.ADMIN_SECRET_2,
+].filter(Boolean);
+console.log('Number of admin passwords configured:', ADMIN_SECRETS.length);
 
 const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
 const FOOTBALL_API_BASE = 'https://api.football-data.org/v4';
@@ -70,7 +73,7 @@ async function fetchFootballData(path) {
 
 function checkAdmin(req, res) {
   const secret = req.headers['x-admin-secret'];
-  if (secret !== ADMIN_SECRET) {
+  if (!ADMIN_SECRETS.includes(secret)) {
     res.status(401).json({ error: 'Unauthorized' });
     return false;
   }
@@ -111,7 +114,6 @@ app.post('/api/notify', async (req, res) => {
   res.json({ sent: results.filter((r) => r.status === 'fulfilled').length });
 });
 
-// Public: only shows articles whose publishAt has already passed
 app.get('/api/articles', async (req, res) => {
   const { category, subcategory } = req.query;
   const filter = { publishAt: { $lte: new Date() } };
@@ -126,7 +128,6 @@ app.get('/api/articles', async (req, res) => {
   }
 });
 
-// Public: single article, hidden until publishAt passes
 app.get('/api/articles/:slug', async (req, res) => {
   try {
     const article = await Article.findOne({
@@ -140,7 +141,6 @@ app.get('/api/articles/:slug', async (req, res) => {
   }
 });
 
-// Admin-only: sees everything, including future-scheduled articles
 app.get('/api/admin/articles', async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
