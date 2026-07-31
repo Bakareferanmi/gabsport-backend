@@ -146,10 +146,21 @@ app.post('/api/notify', adminLimiter, async (req, res) => {
 });
 
 app.get('/api/articles', async (req, res) => {
-  const { category, subcategory, page, limit } = req.query;
+  const { category, subcategory, page, limit, q } = req.query;
   const filter = { publishAt: { $lte: new Date() } };
   if (category) filter.category = category;
   if (subcategory) filter.subcategory = subcategory;
+  if (q && q.trim()) {
+    // Escape regex special characters so user input can't break the query
+    const safeQuery = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const searchRegex = new RegExp(safeQuery, 'i');
+    filter.$or = [
+      { title: searchRegex },
+      { excerpt: searchRegex },
+      { category: searchRegex },
+      { subcategory: searchRegex },
+    ];
+  }
 
   try {
     // Paginated mode: only kicks in when ?page= is provided, so every
