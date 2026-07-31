@@ -6,7 +6,22 @@ const cloudinary = require('cloudinary').v2;
 const mongoose = require('mongoose');
 
 const app = express();
-app.use(cors());
+
+const ALLOWED_ORIGINS = [
+  'https://gabsport.vercel.app',
+  'http://localhost:3000',
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // allow requests with no origin (e.g. curl, server-to-server, mobile app webviews)
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+}));
 app.use(express.json());
 
 mongoose.connect(process.env.MONGODB_URI)
