@@ -157,7 +157,7 @@ app.get('/api/articles', async (req, res) => {
     // exactly as before, unpaginated.
     if (page) {
       const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-      const pageSize = Math.min(Math.max(parseInt(limit, 10) || 13, 1), 50);
+      const pageSize = Math.min(Math.max(parseInt(limit, 10) || 7, 1), 50);
       const totalArticles = await Article.countDocuments(filter);
       const totalPages = Math.max(Math.ceil(totalArticles / pageSize), 1);
 
