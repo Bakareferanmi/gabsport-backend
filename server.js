@@ -54,9 +54,14 @@ webpush.setVapidDetails(
 );
 
 const ADMIN_SECRETS = [
-  process.env.ADMIN_SECRET || 'changeme123',
+  process.env.ADMIN_SECRET,
   process.env.ADMIN_SECRET_2,
 ].filter(Boolean);
+
+if (ADMIN_SECRETS.length === 0) {
+  console.error('FATAL: No ADMIN_SECRET environment variable set. Refusing to start.');
+  process.exit(1);
+}
 console.log('Number of admin passwords configured:', ADMIN_SECRETS.length);
 
 const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
