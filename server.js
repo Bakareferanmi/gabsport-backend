@@ -4,6 +4,7 @@ const webpush = require('web-push');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const mongoose = require('mongoose');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 
@@ -100,6 +101,16 @@ function checkAdmin(req, res) {
   return true;
 }
 
+// Limits admin-protected routes to 20 requests per minute per IP,
+// so a script can't brute-force the admin password.
+const adminLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many admin requests, please wait a minute and try again.' },
+});
+
 app.post('/api/subscribe', async (req, res) => {
   const subscription = req.body;
   try {
@@ -113,7 +124,7 @@ app.post('/api/subscribe', async (req, res) => {
   }
 });
 
-app.post('/api/notify', async (req, res) => {
+app.post('/api/notify', adminLimiter, async (req, res) => {
   if (!checkAdmin(req, res)) return;
 
   const { title, body, url } = req.body;
@@ -161,7 +172,7 @@ app.get('/api/articles/:slug', async (req, res) => {
   }
 });
 
-app.get('/api/admin/articles', async (req, res) => {
+app.get('/api/admin/articles', adminLimiter, async (req, res) => {
   if (!checkAdmin(req, res)) return;
   try {
     const result = await Article.find().sort({ publishAt: -1 });
@@ -171,7 +182,7 @@ app.get('/api/admin/articles', async (req, res) => {
   }
 });
 
-app.post('/api/upload-image', upload.single('image'), async (req, res) => {
+app.post('/api/upload-image', adminLimiter, upload.single('image'), async (req, res) => {
   if (!checkAdmin(req, res)) return;
   if (!req.file) {
     return res.status(400).json({ error: 'No image provided' });
@@ -191,7 +202,7 @@ app.post('/api/upload-image', upload.single('image'), async (req, res) => {
   }
 });
 
-app.post('/api/articles', async (req, res) => {
+app.post('/api/articles', adminLimiter, async (req, res) => {
   if (!checkAdmin(req, res)) return;
 
   const { title, excerpt, content, category, subcategory, image, author, publishAt } = req.body;
@@ -238,7 +249,7 @@ app.post('/api/articles', async (req, res) => {
   }
 });
 
-app.delete('/api/articles/:slug', async (req, res) => {
+app.delete('/api/articles/:slug', adminLimiter, async (req, res) => {
   if (!checkAdmin(req, res)) return;
 
   try {
