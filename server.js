@@ -146,12 +146,34 @@ app.post('/api/notify', adminLimiter, async (req, res) => {
 });
 
 app.get('/api/articles', async (req, res) => {
-  const { category, subcategory } = req.query;
+  const { category, subcategory, page, limit } = req.query;
   const filter = { publishAt: { $lte: new Date() } };
   if (category) filter.category = category;
   if (subcategory) filter.subcategory = subcategory;
 
   try {
+    // Paginated mode: only kicks in when ?page= is provided, so every
+    // existing page that calls this route without ?page= keeps working
+    // exactly as before, unpaginated.
+    if (page) {
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const pageSize = Math.min(Math.max(parseInt(limit, 10) || 13, 1), 50);
+      const totalArticles = await Article.countDocuments(filter);
+      const totalPages = Math.max(Math.ceil(totalArticles / pageSize), 1);
+
+      const result = await Article.find(filter)
+        .sort({ publishAt: -1 })
+        .skip((pageNum - 1) * pageSize)
+        .limit(pageSize);
+
+      return res.json({
+        articles: result,
+        currentPage: pageNum,
+        totalPages,
+        totalArticles,
+      });
+    }
+
     const result = await Article.find(filter).sort({ publishAt: -1 });
     res.json(result);
   } catch (err) {
